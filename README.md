@@ -56,7 +56,7 @@ calculate_statistics: Calculates and displays statistics for client IPs and host
 
 # Complexity
 
-The ranking function in calculate_statistics uses a counting method with a computational complexity of 𝑂(𝑛2).
+The ranking function in calculate_statistics originally uses a counting method with a computational complexity of O(n²). However, with the new approach of using a pre-existing function, it is possible to reduce the algorithm's complexity to O(n).
 
 Notes
 Lumu API Authorization: The script requires a .env file with a Lumu Client Key, the Collector ID to authenticate API requests and the URL to the endpoint.

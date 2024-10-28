@@ -4,50 +4,70 @@ from datetime import datetime
 from dotenv import load_dotenv
 import os
 import json
+import logging
+from collections import Counter
 
+# Load environment variables
 load_dotenv()
-
+logging.basicConfig(level=logging.INFO)
 
 LUMU_CLIENT_KEY = os.getenv('LUMU_CLIENT_KEY')
 COLLECTOR_ID = os.getenv('COLLECTOR_ID')
 API_URL = os.getenv('API_URL')
 
+def validate_environment_variables():
+    """
+    Validates that all required environment variables are set.
+    """
+    required_vars = ['LUMU_CLIENT_KEY', 'COLLECTOR_ID', 'API_URL']
+    missing_vars = [var for var in required_vars if not globals().get(var)]
+    if missing_vars:
+        logging.error(f"Missing environment variables: {', '.join(missing_vars)}")
+        sys.exit(1)
 
 def convert_date(date_str):
-    """"
-    Change date formats from "7-Jul-2022" to "2022-07-07"
     """
-    date_obj = datetime.strptime(date_str, "%d-%b-%Y")
-    return date_obj.strftime("%Y-%m-%d")
-
-
+    Changes date format from "7-Jul-2022" to "2022-07-07".
+    """
+    try:
+        date_obj = datetime.strptime(date_str, "%d-%b-%Y")
+        return date_obj.strftime("%Y-%m-%d")
+    except ValueError:
+        logging.error(f"Incorrect date format: {date_str}")
+        return None
 
 def parse_bind_log(file_path):
     """
-    Analize the BIND log file and extract the IPs of clients and hosts.
+    Parses the BIND log file and extracts client IPs and hostnames.
     """
-    request_json = []
-    
     with open(file_path, 'r') as f:
         for line in f:
-            # Line log sample: 
-            # "18-May-2021 16:34:13.003 queries: info: client @0x55adcc672cc0 45.231.61.2#80 (pizzaseo.com): query: pizzaseo.com IN A +E(0)D (172.20.101.44)"
-            element_list = line.split()
-            timestamp = convert_date(element_list[0]) + 'T' + element_list[1] + 'Z'
-            client_ip = element_list[6].split('#')[0]
-            client_name = element_list[5].replace('@', '')
-            question_type = element_list[11]
-            name = element_list[9]
-            
-            request_json.append({
-                'timestamp': timestamp,
-                'name': name,
-                'client_ip': client_ip,
-                'client_name': client_name,
-                'type': question_type
-            })
-    
-    return request_json
+            try:
+                element_list = line.strip().split()
+                if len(element_list) < 12:
+                    continue  # Skip lines with incorrect format
+
+                date_str = element_list[0]
+                time_str = element_list[1]
+                timestamp = convert_date(date_str)
+                if not timestamp:
+                    continue
+                timestamp += 'T' + time_str + 'Z'
+                client_ip = element_list[6].split('#')[0]
+                client_name = element_list[5].replace('@', '')
+                question_type = element_list[11]
+                name = element_list[9]
+
+                yield {
+                    'timestamp': timestamp,
+                    'name': name,
+                    'client_ip': client_ip,
+                    'client_name': client_name,
+                    'type': question_type
+                }
+            except Exception as e:
+                logging.error(f"Error parsing line: {e}")
+                continue
 
 def send_data_to_lumu(data_chunk):
     """
@@ -57,89 +77,68 @@ def send_data_to_lumu(data_chunk):
         'Content-Type': 'application/json'
     }
 
-    final_URL = API_URL + '/collectors/' + COLLECTOR_ID + '/dns/queries?key=' + LUMU_CLIENT_KEY
+    final_URL = f"{API_URL}/collectors/{COLLECTOR_ID}/dns/queries?key={LUMU_CLIENT_KEY}"
     
-    response = requests.post(final_URL, json=data_chunk, headers=headers)
-    if response.status_code == 200:
-        print("Data sent successfully.")
-    else:
-        print(f"Error sending data: {response.status_code}")
-        print(response.text)
+    try:
+        response = requests.post(final_URL, json=data_chunk, headers=headers)
+        response.raise_for_status()
+        logging.info("Data sent successfully.")
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error sending data: {e}")
 
-
-
-def calculate_statistics(data):
+def calculate_statistics(total_records, client_ip_counts, name_counts):
     """
-    Compute and display statistics from client IPs and names.
-
+    Computes and displays statistics from client IPs and names.
     """
-    total_records = len(data)
+    top_client_ips = client_ip_counts.most_common(5)
+    top_names = name_counts.most_common(5)
     
-    # Extracts values for the dicts
-    client_ips = [entry['client_ip'] for entry in data]
-    name = [entry['name'] for entry in data]
-
-
-    def count_occurrences(items):
-        counts = []
-        unique_items = []
-        
-        for item in items:
-            if item not in unique_items:
-                unique_items.append(item)
-                count = 0
-                for i in items:
-                    if i == item:
-                        count += 1
-                counts.append((item, count))
-        
-        return counts
-    
-    #Computes IP and ranking
-    client_ip_counts = count_occurrences(client_ips)
-    client_name_counts = count_occurrences(name)
-    
-    # Order results descending
-    client_ip_counts.sort(key=lambda x: x[1], reverse=True)
-    client_name_counts.sort(key=lambda x: x[1], reverse=True)
-    
-    # Show results
     print(f"Total records: {total_records}\n")
     
-    # Show IP ranking
-    print("Client IPs Rank")
-    print("---------------")
-    for ip, count in client_ip_counts[:5]:
+    # Display client IP ranking
+    print("Client IPs Ranking")
+    print("------------------")
+    for ip, count in top_client_ips:
         print(f"{ip} {count} {count / total_records * 100:.2f}%")
     
-    # Show Host ranking
-    print("\nHost Rank")
-    print("---------------")
-    for host, count in client_name_counts[:5]:
+    # Display host ranking
+    print("\nHost Ranking")
+    print("------------")
+    for host, count in top_names:
         print(f"{host} {count} {count / total_records * 100:.2f}%")
 
-
 def main():
-    # Verify if args have been passed
+    validate_environment_variables()
+    
     if len(sys.argv) != 2:
-        print("Uso: python dns_collector.py <archivo_log>")
+        print("Usage: python dns_collector.py <log_file>")
         sys.exit(1)
     
     log_file = sys.argv[1]
     
-    # Process the BIND log
-    json_body = parse_bind_log(log_file)
+    CHUNK_SIZE = 500
+    data_chunk = []
+    total_records = 0
+    client_ip_counts = Counter()
+    name_counts = Counter()
     
-    # Sends the data in chunks
-    CHUNK_SIZE = 10
-    for i in range(0, len(json_body), CHUNK_SIZE):
-        data_chunk = json_body[i:i + CHUNK_SIZE]
-        print(data_chunk)
+    for entry in parse_bind_log(log_file):
+        data_chunk.append(entry)
+        total_records += 1
+
+        client_ip_counts.update([entry['client_ip']])
+        name_counts.update([entry['name']])
+
+        if len(data_chunk) >= CHUNK_SIZE:
+            send_data_to_lumu(data_chunk)
+            data_chunk = []
+    
+    # Send any remaining data
+    if data_chunk:
         send_data_to_lumu(data_chunk)
-        input()
-    
-    # Compute statistics
-    calculate_statistics(json_body)
+
+    # Calculate and display statistics
+    calculate_statistics(total_records, client_ip_counts, name_counts)
 
 if __name__ == "__main__":
     main()
