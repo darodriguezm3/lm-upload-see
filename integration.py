@@ -1,15 +1,22 @@
 import requests
 import sys
 from datetime import datetime
+from dotenv import load_dotenv
 import os
+import json
+
+load_dotenv()
 
 
-LUMU_CLIENT_KEY = os.environ.get('LUMU_CLIENT_KEY')
-COLLECTOR_ID = os.environ.get('COLLECTOR_ID')
-API_URL = os.environ.get('API_URL')
+LUMU_CLIENT_KEY = os.getenv('LUMU_CLIENT_KEY')
+COLLECTOR_ID = os.getenv('COLLECTOR_ID')
+API_URL = os.getenv('API_URL')
+
 
 def convert_date(date_str):
-    # Convierte la fecha del formato "7-Jul-2022" al formato "2022-07-07"
+    """"
+    Change date formats from "7-Jul-2022" to "2022-07-07"
+    """
     date_obj = datetime.strptime(date_str, "%d-%b-%Y")
     return date_obj.strftime("%Y-%m-%d")
 
@@ -17,13 +24,13 @@ def convert_date(date_str):
 
 def parse_bind_log(file_path):
     """
-    Analiza el archivo de log BIND y extrae las IPs de clientes y hosts.
+    Analize the BIND log file and extract the IPs of clients and hosts.
     """
     request_json = []
     
     with open(file_path, 'r') as f:
         for line in f:
-            # Ejemplo de línea de log: 
+            # Line log sample: 
             # "18-May-2021 16:34:13.003 queries: info: client @0x55adcc672cc0 45.231.61.2#80 (pizzaseo.com): query: pizzaseo.com IN A +E(0)D (172.20.101.44)"
             element_list = line.split()
             timestamp = convert_date(element_list[0]) + 'T' + element_list[1] + 'Z'
@@ -44,33 +51,31 @@ def parse_bind_log(file_path):
 
 def send_data_to_lumu(data_chunk):
     """
-    Envía un chunk de datos al API de Lumu.
+    Sends a data chunk to the Lumu API.
     """
     headers = {
-        'Authorization': f'Lumu {LUMU_CLIENT_KEY}',
         'Content-Type': 'application/json'
     }
-    payload = {
-        'collector-id': COLLECTOR_ID,
-        'data': data_chunk
-    }
+
+    final_URL = API_URL + '/collectors/' + COLLECTOR_ID + '/dns/queries?key=' + LUMU_CLIENT_KEY
     
-    response = requests.post(API_URL, json=payload, headers=headers)
+    response = requests.post(final_URL, json=data_chunk, headers=headers)
     if response.status_code == 200:
-        print("Datos enviados correctamente.")
+        print("Data sent successfully.")
     else:
-        print(f"Error al enviar datos: {response.status_code}")
+        print(f"Error sending data: {response.status_code}")
+        print(response.text)
 
 
 
 def calculate_statistics(data):
     """
-    Calcula y muestra estadísticas de IPs de clientes y nombres de hosts
-    a partir de una lista de diccionarios con las claves `client_ip` y `name`.
+    Compute and display statistics from client IPs and names.
+
     """
     total_records = len(data)
     
-    # Extrae los valores de client_ip y name de cada diccionario
+    # Extracts values for the dicts
     client_ips = [entry['client_ip'] for entry in data]
     name = [entry['name'] for entry in data]
 
@@ -90,24 +95,24 @@ def calculate_statistics(data):
         
         return counts
     
-    # Calcula el ranking de IPs y hosts
+    #Computes IP and ranking
     client_ip_counts = count_occurrences(client_ips)
     client_name_counts = count_occurrences(name)
     
-    # Ordena los resultados por el conteo en orden descendente
+    # Order results descending
     client_ip_counts.sort(key=lambda x: x[1], reverse=True)
     client_name_counts.sort(key=lambda x: x[1], reverse=True)
     
-    # Muestra el total de registros
+    # Show results
     print(f"Total records: {total_records}\n")
     
-    # Muestra el ranking de IPs
+    # Show IP ranking
     print("Client IPs Rank")
     print("---------------")
     for ip, count in client_ip_counts[:5]:
         print(f"{ip} {count} {count / total_records * 100:.2f}%")
     
-    # Muestra el ranking de hosts
+    # Show Host ranking
     print("\nHost Rank")
     print("---------------")
     for host, count in client_name_counts[:5]:
@@ -115,24 +120,25 @@ def calculate_statistics(data):
 
 
 def main():
-    # Verifica si se pasa el archivo como argumento
+    # Verify if args have been passed
     if len(sys.argv) != 2:
         print("Uso: python dns_collector.py <archivo_log>")
         sys.exit(1)
     
     log_file = sys.argv[1]
     
-    # Procesa el archivo de log
+    # Process the BIND log
     json_body = parse_bind_log(log_file)
     
-    # Envía los datos en chunks de 500 registros
-    CHUNK_SIZE = 500
+    # Sends the data in chunks
+    CHUNK_SIZE = 10
     for i in range(0, len(json_body), CHUNK_SIZE):
         data_chunk = json_body[i:i + CHUNK_SIZE]
-        print(len(data_chunk))
-        #send_data_to_lumu(data_chunk)
+        print(data_chunk)
+        send_data_to_lumu(data_chunk)
+        input()
     
-    # Calcula y muestra las estadísticas
+    # Compute statistics
     calculate_statistics(json_body)
 
 if __name__ == "__main__":
